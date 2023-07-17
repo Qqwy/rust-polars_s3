@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use object_store::MultipartId;
 use object_store::ObjectStore;
 use object_store::path::Path;
 
@@ -12,6 +13,8 @@ struct CloudWriter {
     object_store: Arc<Mutex<Box<dyn ObjectStore>>>,
     // The path in the object_store which we want to write to
     path: Path,
+    // ID of a partially-done upload, used to abort the upload on error
+    multipart_id: MultipartId,
     // The Tokio runtime which the writer uses internally.
     runtime: tokio::runtime::Runtime,
     // Internal writer, constructed at creation
@@ -21,23 +24,38 @@ struct CloudWriter {
 impl CloudWriter {
     pub fn new(object_store: Arc<Mutex<Box<dyn ObjectStore>>>, path: Path) -> Self {
         let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
-        let writer = runtime.block_on(async {
+        let (multipart_id, writer) = runtime.block_on(async {
             let object_store = object_store.lock().unwrap();
-            let (_id, mut async_s3_writer) = object_store.put_multipart(&path).await.expect("Could not create location to write to");
+            let (multipart_id, mut async_s3_writer) = object_store.put_multipart(&path).await.expect("Could not create location to write to");
             let mut sync_s3_uploader = tokio_util::io::SyncIoBridge::new(async_s3_writer);
-            sync_s3_uploader
+            (multipart_id, sync_s3_uploader)
         });
-        CloudWriter{object_store, path, runtime, writer}
+        CloudWriter{object_store, path, multipart_id, runtime, writer}
+    }
+
+    fn abort(&self) {
+        self.runtime.block_on(async {
+            let object_store = self.object_store.lock().unwrap();
+            object_store.abort_multipart(&self.path, &self.multipart_id).await
+        });
     }
 }
 
 impl std::io::Write for CloudWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.writer.write(buf)
+        let res = self.writer.write(buf);
+        if res.is_err() {
+            self.abort();
+        }
+        res
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        self.writer.flush()
+        let res = self.writer.flush();
+        if res.is_err() {
+            self.abort();
+        }
+        res
     }
 }
 
