@@ -13,7 +13,9 @@ The tests contain:
 - A test using `object_storage` manually, with all complexity/verbosity involved in doing so
 - A test using the new `CloudWriter` type which abstracts this complexity.
 
-## Trade-offs
+## Considerations
+
+### Overhead of using an owned Tokio runtime
 
 The current approach requires starting a new Tokio runtime whenever used. This is not free, though probably neglegible if your dataframes are large / because of the overhead of networking communication.
 
@@ -21,3 +23,16 @@ This approach is similar to how currently Polars [already uses Tokio + ObjectSto
 which strengthens my belief that it is the proper approach in this scenario.
 
 I have also implemented an alternative way to construct a `CloudWriter`, by using a (handle to a) pre-existing Tokio runtime. This does not have the same overhead, but requires a user to manage the runtime itself.
+
+### Handling completion
+
+The [ObjectStore::put_multipart](https://docs.rs/object_store/latest/object_store/trait.ObjectStore.html#tymethod.put_multipart) documentation mentions:
+- `abort_multipart` needs to be called when partway through a write the process fails. I think I have implemented this correctly, but should double-check (+test) before creating a final version.
+- `AsyncWrite::poll_shutdown`/`AsyncWriteExt::shutdown` needs to be called when the upload is finished.
+  There is no nice way to do this as part of the `std::io::Write` API.
+  The best idea I have, is to call this whenever the `CloudWriter` is dropped.
+  In practice, this will happen when the e.g. `CsvWriter<CloudWriter>` is dropped.
+  **This is later than when the call to `csv_writer.finish(my_dataframe)` returns!**.
+
+I don't think this is a _problem_ per se, but it's not perfect.
+Thought to self: Maybe we can convince the Polars team to improve the signature of `SerWriter::finish()` to take `self` by value instead of by mutable reference?
