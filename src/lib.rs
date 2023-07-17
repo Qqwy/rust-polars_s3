@@ -25,7 +25,12 @@ impl Either<tokio::runtime::Runtime, tokio::runtime::Handle> {
     }
 }
 
-struct CloudWriter {
+/// CloudWriter wraps the asynchronous interface of [ObjectStore::put_multipart](https://docs.rs/object_store/latest/object_store/trait.ObjectStore.html#tymethod.put_multipart)
+/// in a synchronous interface which implements `std::io::Write`.
+///
+/// This allows it to be used in sync code which would otherwise write to a simple File or byte stream,
+/// such as with `polars::prelude::CsvWriter`.
+pub struct CloudWriter {
     // Hold a reference to the store in a thread-safe way
     object_store: Arc<Mutex<Box<dyn ObjectStore>>>,
     // The path in the object_store which we want to write to
@@ -58,6 +63,10 @@ impl CloudWriter {
     ///
     /// The write will only complete successfully
     /// as long as the Tokio runtime exists longer than the `CloudWriter`.
+    ///
+    /// Note that you must call this method from a thread which is not currently running a Tokio runtime,
+    /// since internally `tokio::runtime::Handle::block_on` is used, which will panic when used from within a Tokio runtime.
+    ///
     pub fn new_with_tokio_handle(object_store: Arc<Mutex<Box<dyn ObjectStore>>>, path: Path, handle: tokio::runtime::Handle) -> Self {
         let (multipart_id, writer) = handle.block_on(async {
             Self::build_writer(&object_store, &path).await
