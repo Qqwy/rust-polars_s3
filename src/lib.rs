@@ -16,6 +16,18 @@ mod tests {
             .unwrap()
     }
 
+    /// Example from the Polars guides:
+    #[test]
+    fn csv_to_file() {
+        use polars::prelude::{CsvWriter, SerWriter};
+
+        let mut df = example_dataframe();
+
+        let mut file = std::fs::File::create("/tmp/example.csv").unwrap();
+        CsvWriter::new(&mut file).finish(&mut df).unwrap();
+    }
+
+    /// Modified example which writes to an ObjectStore:
     #[tokio::test]
     async fn csv_to_local_objectstore_file() {
         use polars::prelude::{CsvWriter, SerWriter};
@@ -36,13 +48,4 @@ mod tests {
 
     }
 
-    #[test]
-    fn csv_to_file() {
-        use polars::prelude::{CsvWriter, SerWriter};
-
-        let mut df = example_dataframe();
-
-        let mut file = std::fs::File::create("/tmp/example.csv").unwrap();
-        CsvWriter::new(&mut file).finish(&mut df).unwrap();
-    }
 }
